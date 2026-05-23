@@ -12,18 +12,27 @@ permissions:
 jobs:
   tag:
     name: Move v1 tag
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Move v1 tag to main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: v1
         run: |
-          git config user.name "W7S"
-          git config user.email "git@w7s.io"
-          git tag --force v1 "$GITHUB_SHA"
-          git push --force origin refs/tags/v1
+          set -euo pipefail
+
+          ref="tags/${TAG_NAME}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/${ref}" >/dev/null 2>&1; then
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/${ref}" \
+              -f sha="${GITHUB_SHA}" \
+              -F force=true >/dev/null
+          else
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/${ref}" \
+              -f sha="${GITHUB_SHA}" >/dev/null
+          fi
