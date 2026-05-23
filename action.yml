@@ -109,6 +109,13 @@ runs:
           payload = JSON.parse(raw);
         } catch {}
 
+        const asArray = (value) => Array.isArray(value) ? value : [];
+        const workflowEscape = (value) => String(value ?? "")
+          .replaceAll("%", "%25")
+          .replaceAll("\r", "%0D")
+          .replaceAll("\n", "%0A");
+        const code = (value) => `\`${String(value ?? "n/a")}\``;
+
         const lines = [
           "### W7S Deploy",
           "",
@@ -127,6 +134,43 @@ runs:
           if (payload.data?.url) {
             lines.push(`- URL: ${payload.data.url}`);
           }
+          const customDomains = asArray(payload.data?.customDomains);
+          if (customDomains.length > 0) {
+            lines.push(`- Custom domains: ${customDomains.map(code).join(", ")}`);
+          }
+
+          const customDomainWarnings = asArray(payload.data?.customDomainWarnings);
+          if (customDomainWarnings.length > 0) {
+            lines.push("", "#### CNAME TXT Security Warning", "");
+            lines.push("These custom domains were attached, but domain ownership is not locked yet. Add the recommended TXT record to prevent another repo from moving the hostname later.");
+            lines.push("");
+            for (const warning of customDomainWarnings) {
+              const hostname = warning.hostname ?? "custom domain";
+              const txtName = warning.txtName ?? "_w7s.<domain>";
+              const txtValue = warning.txtValue ?? deployment?.repository ?? "owner/repo";
+              lines.push(`- ${code(hostname)}: add TXT ${code(txtName)} with value ${code(txtValue)}`);
+              if (warning.message) lines.push(`  ${warning.message}`);
+              console.error(`::warning title=CNAME TXT Security::${workflowEscape(`${hostname} is attached without TXT ownership protection. Add TXT ${txtName}=${txtValue}.`)}`);
+            }
+          }
+
+          const blockedCustomDomains = asArray(payload.data?.blockedCustomDomains);
+          if (blockedCustomDomains.length > 0) {
+            lines.push("", "#### Blocked Custom Domains", "");
+            lines.push("The app deployed, but these hostnames were not attached. Add the listed TXT record or remove the conflicting claim, then deploy again.");
+            lines.push("");
+            for (const blocked of blockedCustomDomains) {
+              const hostname = blocked.hostname ?? "custom domain";
+              const txtName = blocked.txtName ?? "_w7s.<domain>";
+              const txtValue = blocked.txtValue ?? deployment?.repository ?? "owner/repo";
+              const reason = blocked.reason ?? "blocked";
+              lines.push(`- ${code(hostname)} (${code(reason)}): add TXT ${code(txtName)} with value ${code(txtValue)}`);
+              if (blocked.currentRepository) lines.push(`  Current repository: ${code(blocked.currentRepository)}`);
+              if (blocked.message) lines.push(`  ${blocked.message}`);
+              console.error(`::warning title=Blocked custom domain::${workflowEscape(`${hostname} was not attached. Add TXT ${txtName}=${txtValue}.`)}`);
+            }
+          }
+
           if (payload.error || payload.message) {
             lines.push(`- Error: \`${payload.error ?? payload.message}\``);
           }
