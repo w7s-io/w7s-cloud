@@ -1,6 +1,8 @@
-# w7s-cloud
+# w7s-cloud Github Action
 
-Reusable GitHub Action for deploying a repository to W7S.
+Reusable GitHub Action for deploying a repository to <org>.W7S.cloud/<repo> or any custom CNAME domain.
+
+More information at https://w7s.io/
 
 ## Usage
 
