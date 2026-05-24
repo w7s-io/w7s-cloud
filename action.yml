@@ -22,6 +22,14 @@ inputs:
     description: Optional build command to run before deployment.
     required: false
     default: ""
+  vars:
+    description: Optional comma-separated environment variable names to pass as plain-text Worker bindings. Names declared in w7s.json are included automatically.
+    required: false
+    default: ""
+  secrets:
+    description: Optional comma-separated environment variable names to pass as secret Worker bindings. Names declared in w7s.json are included automatically.
+    required: false
+    default: ""
   working-directory:
     description: Directory to package and deploy.
     required: false
@@ -57,6 +65,8 @@ runs:
         INPUT_DEPLOY_URL: ${{ inputs.deploy-url }}
         INPUT_TOKEN: ${{ inputs.token }}
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_VARS: ${{ inputs.vars }}
+        INPUT_SECRETS: ${{ inputs.secrets }}
         FALLBACK_GITHUB_TOKEN: ${{ github.token }}
         GITHUB_REPOSITORY_NAME: ${{ github.repository }}
         GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
@@ -81,20 +91,37 @@ runs:
 
         archive_path="$RUNNER_TEMP/w7s-deploy.zip"
         response_body="$RUNNER_TEMP/w7s-deploy-response.json"
+        metadata_dir="$RUNNER_TEMP/w7s-deploy-metadata"
         rm -f "$archive_path" "$response_body"
+        rm -rf "$metadata_dir"
+
+        node "$GITHUB_ACTION_PATH/scripts/write-deploy-metadata.cjs" "$PWD" "$metadata_dir"
+        vars_header="$(cat "$metadata_dir/vars.b64")"
+        secrets_header="$(cat "$metadata_dir/secrets.b64")"
+
         zip -qr "$archive_path" . \
           -x ".git/*" \
           -x "node_modules/*" \
           -x ".wrangler/*" \
           -x "dist/.vite/*"
 
+        curl_headers=(
+          -H "Authorization: Bearer ${deploy_token}"
+          -H "x-github-repository: ${GITHUB_REPOSITORY_NAME}"
+          -H "x-github-branch: ${GITHUB_REF_NAME_VALUE}"
+          -H "x-github-sha: ${GITHUB_SHA_VALUE}"
+          -H "content-type: application/zip"
+        )
+        if [ -n "$vars_header" ]; then
+          curl_headers+=(-H "x-w7s-vars: ${vars_header}")
+        fi
+        if [ -n "$secrets_header" ]; then
+          curl_headers+=(-H "x-w7s-secrets: ${secrets_header}")
+        fi
+
         http_status="$(curl -sS -o "$response_body" -w "%{http_code}" \
           -X POST "$deploy_url" \
-          -H "Authorization: Bearer ${deploy_token}" \
-          -H "x-github-repository: ${GITHUB_REPOSITORY_NAME}" \
-          -H "x-github-branch: ${GITHUB_REF_NAME_VALUE}" \
-          -H "x-github-sha: ${GITHUB_SHA_VALUE}" \
-          -H "content-type: application/zip" \
+          "${curl_headers[@]}" \
           --data-binary "@${archive_path}")"
 
         node "$GITHUB_ACTION_PATH/scripts/format-deploy-response.cjs" "$response_body" "$http_status"

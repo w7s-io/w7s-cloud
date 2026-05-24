@@ -36,6 +36,35 @@ jobs:
 - `environment`: Optional W7S environment override.
 - `install-command`: Optional command run before packaging.
 - `build-command`: Optional command run before packaging.
+- `vars`: Optional comma-separated environment variable names to pass as plain-text Worker bindings.
+- `secrets`: Optional comma-separated environment variable names to pass as secret Worker bindings.
 - `working-directory`: Directory to package and deploy. Defaults to `.`.
 
 The action packages the working directory as a ZIP archive, excluding `.git`, `node_modules`, `.wrangler`, and `dist/.vite`, then posts it to the W7S deploy endpoint with repository, branch, and commit headers.
+
+If the repo contains `w7s.json`, any names listed in its `vars` and `secrets` arrays are collected from the workflow environment automatically. Explicit `vars` and `secrets` inputs can add more names.
+
+Example with runtime values:
+
+```yaml
+- uses: w7s-io/w7s-cloud@v1
+  env:
+    PUBLIC_API_KEY: ${{ vars.PUBLIC_API_KEY }}
+    PRIVATE_API_KEY: ${{ secrets.PRIVATE_API_KEY }}
+  with:
+    token: ${{ github.token }}
+    vars: PUBLIC_API_KEY
+    secrets: PRIVATE_API_KEY
+```
+
+Storage bindings are declared in the deployed repo's `w7s.json`:
+
+```json
+{
+  "bindings": {
+    "kv": ["CACHE"],
+    "r2": ["FILES"],
+    "d1": [{ "binding": "DB", "migrations": "migrations" }]
+  }
+}
+```
