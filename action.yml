@@ -99,6 +99,11 @@ runs:
         vars_header="$(cat "$metadata_dir/vars.b64")"
         secrets_header="$(cat "$metadata_dir/secrets.b64")"
 
+        if [ ! -f CNAME ] && [ -n "${GITHUB_WORKSPACE:-}" ] && [ -f "$GITHUB_WORKSPACE/CNAME" ]; then
+          cp "$GITHUB_WORKSPACE/CNAME" CNAME
+          echo "Copied repo-root CNAME into the deploy directory."
+        fi
+
         zip -qr "$archive_path" . \
           -x ".git/*" \
           -x "node_modules/*" \

@@ -42,6 +42,8 @@ jobs:
 
 The action packages the working directory as a ZIP archive, excluding `.git`, `node_modules`, `.wrangler`, and `dist/.vite`, then posts it to the W7S deploy endpoint with repository, branch, and commit headers.
 
+If the workflow deploys a build directory with `working-directory` and that directory does not contain a `CNAME`, the action copies the repository root `CNAME` into the deploy directory before packaging. A `CNAME` already present in the deploy directory is left unchanged.
+
 If the repo contains `w7s.json`, any names listed in its `vars` and `secrets` arrays are collected from the workflow environment automatically. Explicit `vars` and `secrets` inputs can add more names.
 
 Example with runtime values:
