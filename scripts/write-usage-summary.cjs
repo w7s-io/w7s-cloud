@@ -115,8 +115,8 @@ const renderWarnings = (usagePayload, issueResult = null, options = {}) => {
     "#### ⚠️ W7S Usage Warnings",
     "",
     options.checkOnly
-      ? "This usage check found the repo near or over one or more daily soft limits."
-      : "This deployment succeeded, but the repo is near or over one or more daily soft limits.",
+      ? "This usage check found the repo near or over one or more daily limits."
+      : "This deployment succeeded, but the repo is near or over one or more daily limits.",
     ""
   ];
 
@@ -129,7 +129,7 @@ const renderWarnings = (usagePayload, issueResult = null, options = {}) => {
     lines.push(`- ${code(metric)} ${code(status)}: ${code(used)} used of ${code(limit)} daily units, ${code(remaining)} remaining.`);
   }
 
-  lines.push("", "Soft limits are advisory today; W7S does not block traffic from these warnings yet.");
+  lines.push("", "W7S returns HTTP `429` when a request would exceed an enforced daily limit.");
   if (issueResult?.htmlUrl) {
     const action = issueResult.action === "updated" ? "Updated issue" : "Opened issue";
     lines.push("", `${action}: [#${issueResult.number}](${issueResult.htmlUrl})`);
@@ -208,7 +208,7 @@ const issueBodyFor = (params) => {
   const lines = [
     issueMarkerFor(environment),
     "",
-    "W7S reported daily soft limit warnings for this repository.",
+    "W7S reported daily usage limit warnings for this repository.",
     "",
     `- Repository: ${code(deployment?.repository)}`,
     `- Environment: ${code(environment)}`,
@@ -221,7 +221,7 @@ const issueBodyFor = (params) => {
   ];
   if (runUrl) lines.push(`- Workflow run: [${text(process.env.GITHUB_WORKFLOW_VALUE || "Deploy")}](${runUrl})`);
   lines.push("", ...warningTable(warnings), "");
-  lines.push("These limits are advisory today; W7S does not block traffic from them yet.");
+  lines.push("W7S returns HTTP `429` when a request would exceed an enforced daily limit.");
   lines.push("This issue is updated by `w7s-io/w7s-cloud@v1` while warnings continue.");
   return lines.join("\n");
 };

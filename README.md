@@ -51,7 +51,7 @@ The action packages the working directory as a ZIP archive, excluding `.git`, `n
 
 If the workflow deploys a build directory with `working-directory` and that directory does not contain a `CNAME`, the action copies the repository root `CNAME` into the deploy directory before packaging. A `CNAME` already present in the deploy directory is left unchanged.
 
-After a successful deploy, the action reads the repo's W7S usage for the deployed day. If any daily soft limits are near or over the configured policy, the action adds a warning section to the GitHub Actions step summary and opens or updates a single GitHub issue for that repo/environment. Issue notifications require `issues: write`; set `usage-warnings-issue: false` to keep warnings in the workflow summary only.
+After a successful deploy, the action reads the repo's W7S usage for the deployed day. If any daily limits are near or over the configured policy, the action adds a warning section to the GitHub Actions step summary and opens or updates a single GitHub issue for that repo/environment. Issue notifications require `issues: write`; set `usage-warnings-issue: false` to keep warnings in the workflow summary only.
 
 Scheduled workflows can set `usage-check-only: true` to check the current day's limits and update the warning issue without deploying again.
 
