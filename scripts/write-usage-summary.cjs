@@ -3,10 +3,21 @@ const fs = require("node:fs");
 const [, , responsePath, deployUrl] = process.argv;
 
 const token = process.env.W7S_DEPLOY_TOKEN || "";
+const issueToken = process.env.W7S_GITHUB_TOKEN || token;
+const issueWarningsInput = process.env.INPUT_USAGE_WARNINGS_ISSUE;
 
 const asArray = (value) => Array.isArray(value) ? value : [];
 const code = (value) => `\`${String(value ?? "n/a")}\``;
 const text = (value) => String(value ?? "n/a");
+const markdownEscape = (value) => String(value ?? "n/a").replace(/\|/g, "\\|");
+const issueMarkerFor = (environment) => `<!-- w7s-usage-warnings:${String(environment || "production")} -->`;
+
+const booleanInput = (value, fallback) => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+};
 
 const readDeployResponse = () => {
   if (!responsePath || !fs.existsSync(responsePath)) return null;
@@ -36,7 +47,7 @@ const usageUrlFor = (params) => {
   return url;
 };
 
-const renderWarnings = (usagePayload) => {
+const renderWarnings = (usagePayload, issueResult = null) => {
   const warnings = asArray(usagePayload?.data?.warnings);
   if (warnings.length === 0) return null;
 
@@ -58,12 +69,170 @@ const renderWarnings = (usagePayload) => {
   }
 
   lines.push("", "Soft limits are advisory today; W7S does not block traffic from these warnings yet.");
+  if (issueResult?.htmlUrl) {
+    const action = issueResult.action === "updated" ? "Updated issue" : "Opened issue";
+    lines.push("", `${action}: [#${issueResult.number}](${issueResult.htmlUrl})`);
+  } else if (issueResult?.skipped) {
+    lines.push("", `Issue notification skipped: ${issueResult.skipped}`);
+  }
   return lines;
 };
 
 const appendSummary = (lines) => {
   if (!lines || lines.length === 0 || !process.env.GITHUB_STEP_SUMMARY) return;
   fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+};
+
+const githubApiBase = () =>
+  String(process.env.GITHUB_API_URL_VALUE || process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+
+const githubRequest = async (params) => {
+  const response = await fetch(`${githubApiBase()}${params.path}`, {
+    method: params.method || "GET",
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${params.token}`,
+      "content-type": "application/json",
+      "x-github-api-version": "2022-11-28",
+      "user-agent": "w7s-cloud-action"
+    },
+    body: params.body ? JSON.stringify(params.body) : undefined
+  });
+  const raw = await response.text();
+  let payload = null;
+  try {
+    payload = raw ? JSON.parse(raw) : null;
+  } catch {}
+  return { response, payload, raw };
+};
+
+const githubRepoPath = (repository) => {
+  const [owner, repo] = String(repository || "").split("/");
+  if (!owner || !repo) return null;
+  return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+};
+
+const runUrlFor = (deployment) => {
+  const serverUrl = String(process.env.GITHUB_SERVER_URL_VALUE || process.env.GITHUB_SERVER_URL || "https://github.com").replace(/\/+$/, "");
+  const repository = deployment?.repository || process.env.GITHUB_REPOSITORY_NAME || process.env.GITHUB_REPOSITORY;
+  const runId = process.env.GITHUB_RUN_ID_VALUE || process.env.GITHUB_RUN_ID;
+  if (!repository || !runId) return null;
+  return `${serverUrl}/${repository}/actions/runs/${runId}`;
+};
+
+const commitUrlFor = (deployment) => {
+  const serverUrl = String(process.env.GITHUB_SERVER_URL_VALUE || process.env.GITHUB_SERVER_URL || "https://github.com").replace(/\/+$/, "");
+  if (!deployment?.repository || !deployment?.commitSha) return null;
+  return `${serverUrl}/${deployment.repository}/commit/${deployment.commitSha}`;
+};
+
+const warningTable = (warnings) => [
+  "| Metric | Status | Used | Limit | Remaining |",
+  "| --- | --- | ---: | ---: | ---: |",
+  ...warnings.map((warning) =>
+    `| ${markdownEscape(warning.metric)} | ${markdownEscape(warning.status)} | ${markdownEscape(warning.used)} | ${markdownEscape(warning.limit)} | ${markdownEscape(warning.remaining)} |`
+  )
+];
+
+const issueBodyFor = (params) => {
+  const deployment = params.deployment;
+  const deploymentUrl = params.deploymentUrl;
+  const warnings = asArray(params.usagePayload?.data?.warnings);
+  const usage = params.usagePayload?.data?.usage;
+  const date = usage?.date || usageDate(deployment?.deployedAt);
+  const environment = deployment?.environment || usage?.environment || "production";
+  const runUrl = runUrlFor(deployment);
+  const commitUrl = commitUrlFor(deployment);
+  const lines = [
+    issueMarkerFor(environment),
+    "",
+    "W7S reported daily soft limit warnings for this repository.",
+    "",
+    `- Repository: ${code(deployment?.repository)}`,
+    `- Environment: ${code(environment)}`,
+    `- Date: ${code(date)}`,
+    `- Branch: ${code(deployment?.branch)}`,
+    `- Commit: ${commitUrl ? `[${String(deployment?.commitSha || "").slice(0, 12)}](${commitUrl})` : code(deployment?.commitSha)}`,
+    `- Deployment: ${deploymentUrl ? `[${deploymentUrl}](${deploymentUrl})` : code("n/a")}`
+  ];
+  if (runUrl) lines.push(`- Workflow run: [${text(process.env.GITHUB_WORKFLOW_VALUE || "Deploy")}](${runUrl})`);
+  lines.push("", ...warningTable(warnings), "");
+  lines.push("These limits are advisory today; W7S does not block traffic from them yet.");
+  lines.push("This issue is updated by `w7s-io/w7s-cloud@v1` while warnings continue.");
+  return lines.join("\n");
+};
+
+const findOpenUsageIssue = async (params) => {
+  const repoPath = githubRepoPath(params.repository);
+  if (!repoPath) return null;
+  const marker = issueMarkerFor(params.environment);
+  const { response, payload, raw } = await githubRequest({
+    token: params.token,
+    path: `${repoPath}/issues?state=open&per_page=100`
+  });
+  if (!response.ok) {
+    return {
+      error: `GitHub issues lookup failed (HTTP ${response.status}${raw ? `: ${raw.slice(0, 180)}` : ""}).`
+    };
+  }
+  const issue = asArray(payload).find((candidate) =>
+    !candidate.pull_request &&
+    (String(candidate.body || "").includes(marker) || candidate.title === params.title)
+  );
+  return issue || null;
+};
+
+const upsertUsageIssue = async (params) => {
+  if (!booleanInput(issueWarningsInput, true)) {
+    return { skipped: "`usage-warnings-issue` is disabled." };
+  }
+  if (!params.repository || !params.token) {
+    return { skipped: "missing GitHub token or repository." };
+  }
+
+  const repoPath = githubRepoPath(params.repository);
+  if (!repoPath) return { skipped: "repository is not in owner/repo form." };
+
+  const environment = params.deployment?.environment || "production";
+  const title = `W7S usage warning for ${environment}`;
+  const body = issueBodyFor({
+    deployment: params.deployment,
+    deploymentUrl: params.deploymentUrl,
+    usagePayload: params.usagePayload
+  });
+
+  const existing = await findOpenUsageIssue({
+    token: params.token,
+    repository: params.repository,
+    environment,
+    title
+  });
+  if (existing?.error) return { skipped: existing.error };
+
+  const request = existing ? {
+    method: "PATCH",
+    path: `${repoPath}/issues/${existing.number}`,
+    body: { title, body }
+  } : {
+    method: "POST",
+    path: `${repoPath}/issues`,
+    body: { title, body }
+  };
+
+  const { response, payload, raw } = await githubRequest({
+    token: params.token,
+    ...request
+  });
+  if (!response.ok) {
+    return {
+      skipped: `GitHub issue ${existing ? "update" : "create"} failed (HTTP ${response.status}${raw ? `: ${raw.slice(0, 180)}` : ""}).`
+    };
+  }
+  return {
+    action: existing ? "updated" : "opened",
+    number: payload?.number,
+    htmlUrl: payload?.html_url
+  };
 };
 
 const main = async () => {
@@ -114,7 +283,19 @@ const main = async () => {
         `- ${text(warning.metric)} ${text(warning.status)}: ${text(warning.used)}/${text(warning.limit)} daily units`
       );
     }
-    appendSummary(renderWarnings(usagePayload));
+    const issueResult = await upsertUsageIssue({
+      token: issueToken,
+      repository: deployment.repository,
+      deployment,
+      deploymentUrl: deployPayload?.data?.url,
+      usagePayload
+    });
+    if (issueResult.htmlUrl) {
+      console.log(`W7S usage warnings issue ${issueResult.action}: ${issueResult.htmlUrl}`);
+    } else if (issueResult.skipped) {
+      console.log(`W7S usage warnings issue skipped: ${issueResult.skipped}`);
+    }
+    appendSummary(renderWarnings(usagePayload, issueResult));
   } catch (error) {
     console.log(`W7S usage warnings: skipped (${error instanceof Error ? error.message : String(error)}).`);
   }

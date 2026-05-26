@@ -34,6 +34,10 @@ inputs:
     description: Directory to package and deploy.
     required: false
     default: .
+  usage-warnings-issue:
+    description: Open or update a GitHub issue when W7S reports usage warnings. Requires issues: write.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -71,6 +75,13 @@ runs:
         GITHUB_REPOSITORY_NAME: ${{ github.repository }}
         GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
         GITHUB_SHA_VALUE: ${{ github.sha }}
+        GITHUB_API_URL_VALUE: ${{ github.api_url }}
+        GITHUB_SERVER_URL_VALUE: ${{ github.server_url }}
+        GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
+        GITHUB_RUN_ATTEMPT_VALUE: ${{ github.run_attempt }}
+        GITHUB_WORKFLOW_VALUE: ${{ github.workflow }}
+        GITHUB_ACTION_TOKEN: ${{ github.token }}
+        INPUT_USAGE_WARNINGS_ISSUE: ${{ inputs.usage-warnings-issue }}
       run: |
         set -euo pipefail
 
@@ -130,4 +141,4 @@ runs:
           --data-binary "@${archive_path}")"
 
         node "$GITHUB_ACTION_PATH/scripts/format-deploy-response.cjs" "$response_body" "$http_status"
-        W7S_DEPLOY_TOKEN="$deploy_token" node "$GITHUB_ACTION_PATH/scripts/write-usage-summary.cjs" "$response_body" "$deploy_url"
+        W7S_DEPLOY_TOKEN="$deploy_token" W7S_GITHUB_TOKEN="$GITHUB_ACTION_TOKEN" node "$GITHUB_ACTION_PATH/scripts/write-usage-summary.cjs" "$response_body" "$deploy_url"
