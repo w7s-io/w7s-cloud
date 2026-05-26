@@ -151,7 +151,11 @@ runs:
         zip -qr "$archive_path" . \
           -x ".git/*" \
           -x "node_modules/*" \
+          -x "*/node_modules/*" \
+          -x "*/*/node_modules/*" \
           -x ".wrangler/*" \
+          -x "*/.wrangler/*" \
+          -x "*/*/.wrangler/*" \
           -x "dist/.vite/*"
 
         curl_headers=(
