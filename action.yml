@@ -130,3 +130,4 @@ runs:
           --data-binary "@${archive_path}")"
 
         node "$GITHUB_ACTION_PATH/scripts/format-deploy-response.cjs" "$response_body" "$http_status"
+        W7S_DEPLOY_TOKEN="$deploy_token" node "$GITHUB_ACTION_PATH/scripts/write-usage-summary.cjs" "$response_body" "$deploy_url"
