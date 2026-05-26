@@ -18,6 +18,7 @@ const booleanInput = (value, fallback) => {
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return fallback;
 };
+const usageCheckOnly = booleanInput(process.env.W7S_USAGE_CHECK_ONLY, false);
 
 const readDeployResponse = () => {
   if (!responsePath || !fs.existsSync(responsePath)) return null;
@@ -34,6 +35,22 @@ const usageDate = (deployedAt) => {
   return date.toISOString().slice(0, 10);
 };
 
+const sanitizeEnvironment = (value) => {
+  const sanitized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 63);
+  return sanitized || "production";
+};
+
+const environmentForBranch = (branch) => {
+  const normalized = String(branch || "").trim();
+  if (!normalized || normalized === "main" || normalized === "master") return "production";
+  return sanitizeEnvironment(normalized);
+};
+
 const usageUrlFor = (params) => {
   const repositoryParts = String(params.repository || "").split("/");
   if (repositoryParts.length !== 2 || !repositoryParts[0] || !repositoryParts[1]) return null;
@@ -47,7 +64,49 @@ const usageUrlFor = (params) => {
   return url;
 };
 
-const renderWarnings = (usagePayload, issueResult = null) => {
+const readUsageTarget = (deployPayload) => {
+  const deployment = deployPayload?.data?.deployment;
+  const repository = deployment?.repository ||
+    process.env.W7S_USAGE_REPOSITORY ||
+    process.env.GITHUB_REPOSITORY_NAME ||
+    process.env.GITHUB_REPOSITORY;
+  if (!repository) return null;
+
+  const branch = deployment?.branch ||
+    process.env.W7S_USAGE_BRANCH ||
+    process.env.GITHUB_REF_NAME_VALUE ||
+    process.env.GITHUB_REF_NAME ||
+    "";
+  const explicitEnvironment = deployment?.environment ||
+    process.env.W7S_USAGE_ENVIRONMENT ||
+    process.env.INPUT_ENVIRONMENT ||
+    "";
+  const environment = explicitEnvironment.trim()
+    ? sanitizeEnvironment(explicitEnvironment)
+    : environmentForBranch(branch);
+  const deployedAt = deployment?.deployedAt || process.env.W7S_USAGE_AT || new Date().toISOString();
+  const commitSha = deployment?.commitSha ||
+    process.env.W7S_USAGE_COMMIT_SHA ||
+    process.env.GITHUB_SHA_VALUE ||
+    process.env.GITHUB_SHA ||
+    "";
+
+  return {
+    deployment: deployment ?? {
+      repository,
+      environment,
+      branch,
+      commitSha,
+      deployedAt
+    },
+    deploymentUrl: deployPayload?.data?.url || null,
+    repository,
+    environment,
+    deployedAt
+  };
+};
+
+const renderWarnings = (usagePayload, issueResult = null, options = {}) => {
   const warnings = asArray(usagePayload?.data?.warnings);
   if (warnings.length === 0) return null;
 
@@ -55,7 +114,9 @@ const renderWarnings = (usagePayload, issueResult = null) => {
     "",
     "#### ⚠️ W7S Usage Warnings",
     "",
-    "This deployment succeeded, but the repo is near or over one or more daily soft limits.",
+    options.checkOnly
+      ? "This usage check found the repo near or over one or more daily soft limits."
+      : "This deployment succeeded, but the repo is near or over one or more daily soft limits.",
     ""
   ];
 
@@ -137,6 +198,7 @@ const warningTable = (warnings) => [
 const issueBodyFor = (params) => {
   const deployment = params.deployment;
   const deploymentUrl = params.deploymentUrl;
+  const checkOnly = Boolean(params.checkOnly);
   const warnings = asArray(params.usagePayload?.data?.warnings);
   const usage = params.usagePayload?.data?.usage;
   const date = usage?.date || usageDate(deployment?.deployedAt);
@@ -153,7 +215,9 @@ const issueBodyFor = (params) => {
     `- Date: ${code(date)}`,
     `- Branch: ${code(deployment?.branch)}`,
     `- Commit: ${commitUrl ? `[${String(deployment?.commitSha || "").slice(0, 12)}](${commitUrl})` : code(deployment?.commitSha)}`,
-    `- Deployment: ${deploymentUrl ? `[${deploymentUrl}](${deploymentUrl})` : code("n/a")}`
+    checkOnly
+      ? "- Check: usage only"
+      : `- Deployment: ${deploymentUrl ? `[${deploymentUrl}](${deploymentUrl})` : code("n/a")}`
   ];
   if (runUrl) lines.push(`- Workflow run: [${text(process.env.GITHUB_WORKFLOW_VALUE || "Deploy")}](${runUrl})`);
   lines.push("", ...warningTable(warnings), "");
@@ -198,6 +262,7 @@ const upsertUsageIssue = async (params) => {
   const body = issueBodyFor({
     deployment: params.deployment,
     deploymentUrl: params.deploymentUrl,
+    checkOnly: params.checkOnly,
     usagePayload: params.usagePayload
   });
 
@@ -237,16 +302,16 @@ const upsertUsageIssue = async (params) => {
 
 const main = async () => {
   const deployPayload = readDeployResponse();
-  const deployment = deployPayload?.data?.deployment;
-  if (!deployment?.repository || !token) return;
+  const target = readUsageTarget(deployPayload);
+  if (!target?.repository || !token) return;
 
   let usageUrl;
   try {
     usageUrl = usageUrlFor({
       deployUrl,
-      repository: deployment.repository,
-      environment: deployment.environment,
-      deployedAt: deployment.deployedAt
+      repository: target.repository,
+      environment: target.environment,
+      deployedAt: target.deployedAt
     });
   } catch (error) {
     console.log(`W7S usage warnings: skipped (${error instanceof Error ? error.message : String(error)}).`);
@@ -285,9 +350,10 @@ const main = async () => {
     }
     const issueResult = await upsertUsageIssue({
       token: issueToken,
-      repository: deployment.repository,
-      deployment,
-      deploymentUrl: deployPayload?.data?.url,
+      repository: target.repository,
+      deployment: target.deployment,
+      deploymentUrl: target.deploymentUrl,
+      checkOnly: usageCheckOnly,
       usagePayload
     });
     if (issueResult.htmlUrl) {
@@ -295,7 +361,7 @@ const main = async () => {
     } else if (issueResult.skipped) {
       console.log(`W7S usage warnings issue skipped: ${issueResult.skipped}`);
     }
-    appendSummary(renderWarnings(usagePayload, issueResult));
+    appendSummary(renderWarnings(usagePayload, issueResult, { checkOnly: usageCheckOnly }));
   } catch (error) {
     console.log(`W7S usage warnings: skipped (${error instanceof Error ? error.message : String(error)}).`);
   }
