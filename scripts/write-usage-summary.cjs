@@ -108,7 +108,8 @@ const readUsageTarget = (deployPayload) => {
 
 const renderWarnings = (usagePayload, issueResult = null, options = {}) => {
   const warnings = asArray(usagePayload?.data?.warnings);
-  if (warnings.length === 0) return null;
+  const appLimitState = usagePayload?.data?.appLimitState;
+  if (warnings.length === 0 && !appLimitState) return null;
 
   const lines = [
     "",
@@ -119,6 +120,20 @@ const renderWarnings = (usagePayload, issueResult = null, options = {}) => {
       : "This deployment succeeded, but the repo is near or over one or more daily limits.",
     ""
   ];
+
+  const usage = usagePayload?.data?.usage;
+  if (usage?.cloudflareSyncedAt) {
+    lines.push(`- Cloudflare usage synced at: ${code(usage.cloudflareSyncedAt)}`);
+  }
+  if (Array.isArray(usage?.cloudflareHours) && usage.cloudflareHours.length > 0) {
+    lines.push(`- Cloudflare hourly records: ${code(usage.cloudflareHours.length)}`);
+  }
+  if (appLimitState) {
+    lines.push(`- App status: ${code(appLimitState.status)}`);
+    if (appLimitState.reason) lines.push(`- Reason: ${text(appLimitState.reason)}`);
+    if (appLimitState.resumeAfter) lines.push(`- Resume after: ${code(appLimitState.resumeAfter)}`);
+  }
+  if (usage?.cloudflareSyncedAt || appLimitState) lines.push("");
 
   for (const warning of warnings) {
     const metric = warning.metric ?? "unknown";
@@ -200,6 +215,7 @@ const issueBodyFor = (params) => {
   const deploymentUrl = params.deploymentUrl;
   const checkOnly = Boolean(params.checkOnly);
   const warnings = asArray(params.usagePayload?.data?.warnings);
+  const appLimitState = params.usagePayload?.data?.appLimitState;
   const usage = params.usagePayload?.data?.usage;
   const date = usage?.date || usageDate(deployment?.deployedAt);
   const environment = deployment?.environment || usage?.environment || "production";
@@ -208,7 +224,7 @@ const issueBodyFor = (params) => {
   const lines = [
     issueMarkerFor(environment),
     "",
-    "W7S reported daily usage limit warnings for this repository.",
+    "W7S reported daily usage limit warnings or suspension state for this repository.",
     "",
     `- Repository: ${code(deployment?.repository)}`,
     `- Environment: ${code(environment)}`,
@@ -220,7 +236,18 @@ const issueBodyFor = (params) => {
       : `- Deployment: ${deploymentUrl ? `[${deploymentUrl}](${deploymentUrl})` : code("n/a")}`
   ];
   if (runUrl) lines.push(`- Workflow run: [${text(process.env.GITHUB_WORKFLOW_VALUE || "Deploy")}](${runUrl})`);
-  lines.push("", ...warningTable(warnings), "");
+  if (usage?.cloudflareSyncedAt) lines.push(`- Cloudflare usage synced at: ${code(usage.cloudflareSyncedAt)}`);
+  if (Array.isArray(usage?.cloudflareHours)) lines.push(`- Cloudflare hourly records: ${code(usage.cloudflareHours.length)}`);
+  if (appLimitState) {
+    lines.push(`- App status: ${code(appLimitState.status)}`);
+    if (appLimitState.reason) lines.push(`- Reason: ${text(appLimitState.reason)}`);
+    if (appLimitState.resumeAfter) lines.push(`- Resume after: ${code(appLimitState.resumeAfter)}`);
+  }
+  if (warnings.length > 0) {
+    lines.push("", ...warningTable(warnings), "");
+  } else {
+    lines.push("", "No metric warnings were returned with the current usage response.", "");
+  }
   lines.push("W7S returns HTTP `429` when a request would exceed an enforced daily limit.");
   lines.push("This issue is updated by `w7s-io/w7s-cloud@v1` while warnings continue.");
   return lines.join("\n");
@@ -337,7 +364,8 @@ const main = async () => {
     }
 
     const warnings = asArray(usagePayload?.data?.warnings);
-    if (warnings.length === 0) {
+    const appLimitState = usagePayload?.data?.appLimitState;
+    if (warnings.length === 0 && !appLimitState) {
       console.log("W7S usage warnings: none.");
       return;
     }
@@ -347,6 +375,9 @@ const main = async () => {
       console.log(
         `- ${text(warning.metric)} ${text(warning.status)}: ${text(warning.used)}/${text(warning.limit)} daily units`
       );
+    }
+    if (appLimitState) {
+      console.log(`- app ${text(appLimitState.status)}: ${text(appLimitState.reason)}`);
     }
     const issueResult = await upsertUsageIssue({
       token: issueToken,
