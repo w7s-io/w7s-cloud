@@ -42,12 +42,40 @@ inputs:
     description: Read W7S usage, Cloudflare-synced metrics, and suspension state without packaging or deploying the repository.
     required: false
     default: "false"
+  logs-check-only:
+    description: Read recent W7S user Worker logs without packaging or deploying the repository.
+    required: false
+    default: "false"
+  logs-hours:
+    description: Number of trailing hours of logs to fetch.
+    required: false
+    default: "1"
+  logs-limit:
+    description: Maximum number of log records to fetch.
+    required: false
+    default: "50"
+  logs-kind:
+    description: Optional log kind filter. Supported values are console, exception, and outcome.
+    required: false
+    default: ""
+  logs-level:
+    description: Optional console log level filter. Supported values are debug, info, log, warn, and error.
+    required: false
+    default: ""
+
+outputs:
+  logs-count:
+    description: Number of log records returned when logs-check-only is true.
+    value: ${{ steps.logs.outputs['logs-count'] }}
+  logs-url:
+    description: W7S logs API URL used when logs-check-only is true.
+    value: ${{ steps.logs.outputs['logs-url'] }}
 
 runs:
   using: composite
   steps:
     - name: Install
-      if: ${{ inputs.install-command != '' && inputs.usage-check-only != 'true' }}
+      if: ${{ inputs.install-command != '' && inputs.usage-check-only != 'true' && inputs.logs-check-only != 'true' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -57,7 +85,7 @@ runs:
         eval "$W7S_INSTALL_COMMAND"
 
     - name: Build
-      if: ${{ inputs.build-command != '' && inputs.usage-check-only != 'true' }}
+      if: ${{ inputs.build-command != '' && inputs.usage-check-only != 'true' && inputs.logs-check-only != 'true' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -67,7 +95,7 @@ runs:
         eval "$W7S_BUILD_COMMAND"
 
     - name: Deploy
-      if: ${{ inputs.usage-check-only != 'true' }}
+      if: ${{ inputs.usage-check-only != 'true' && inputs.logs-check-only != 'true' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -183,3 +211,37 @@ runs:
         W7S_DEPLOY_TOKEN="$deploy_token" \
         W7S_GITHUB_TOKEN="$GITHUB_ACTION_TOKEN" \
           node "$GITHUB_ACTION_PATH/scripts/write-usage-summary.cjs" "" "$INPUT_DEPLOY_URL"
+
+    - name: Fetch logs
+      id: logs
+      if: ${{ inputs.logs-check-only == 'true' }}
+      shell: bash
+      env:
+        INPUT_DEPLOY_URL: ${{ inputs.deploy-url }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_LOGS_HOURS: ${{ inputs.logs-hours }}
+        INPUT_LOGS_LIMIT: ${{ inputs.logs-limit }}
+        INPUT_LOGS_KIND: ${{ inputs.logs-kind }}
+        INPUT_LOGS_LEVEL: ${{ inputs.logs-level }}
+        FALLBACK_GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY_NAME: ${{ github.repository }}
+        GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+
+        deploy_token="${INPUT_TOKEN:-$FALLBACK_GITHUB_TOKEN}"
+        if [ -z "$deploy_token" ]; then
+          echo "W7S logs check requires a GitHub token." >&2
+          exit 1
+        fi
+
+        W7S_DEPLOY_TOKEN="$deploy_token" \
+        W7S_LOGS_REPOSITORY="$GITHUB_REPOSITORY_NAME" \
+        W7S_LOGS_ENVIRONMENT="$INPUT_ENVIRONMENT" \
+        W7S_LOGS_BRANCH="$GITHUB_REF_NAME_VALUE" \
+        W7S_LOGS_HOURS="$INPUT_LOGS_HOURS" \
+        W7S_LOGS_LIMIT="$INPUT_LOGS_LIMIT" \
+        W7S_LOGS_KIND="$INPUT_LOGS_KIND" \
+        W7S_LOGS_LEVEL="$INPUT_LOGS_LEVEL" \
+          node "$GITHUB_ACTION_PATH/scripts/write-logs-summary.cjs" "$INPUT_DEPLOY_URL"
