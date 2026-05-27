@@ -10,8 +10,11 @@ try {
 const asArray = (value) => Array.isArray(value) ? value : [];
 const code = (value) => `\`${String(value ?? "n/a")}\``;
 const text = (value) => String(value ?? "n/a");
+const commandValue = (value) =>
+  String(value ?? "").replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
 const prettyRaw = payload ? JSON.stringify(payload, null, 2) : raw;
 const deployment = payload?.data?.deployment;
+const deploymentWarnings = asArray(payload?.data?.deploymentWarnings);
 const customDomains = asArray(payload?.data?.customDomains);
 const customDomainWarnings = asArray(payload?.data?.customDomainWarnings);
 const blockedCustomDomains = asArray(payload?.data?.blockedCustomDomains);
@@ -36,6 +39,14 @@ if (deployment) {
   if (bindingSummary.length > 0) logLines.push(`Bindings: ${bindingSummary.join(", ")}`);
 }
 if (payload?.data?.url) logLines.push(`URL: ${payload.data.url}`);
+if (deploymentWarnings.length > 0) {
+  logLines.push("", "Deploy warnings:");
+  for (const warning of deploymentWarnings) {
+    const message = warning.message ?? warning.code ?? "W7S reported a deploy warning.";
+    logLines.push(`- ${message}`);
+    console.log(`::warning title=W7S deploy warning::${commandValue(message)}`);
+  }
+}
 if (customDomains.length > 0) logLines.push(`Custom domains: ${customDomains.map(text).join(", ")}`);
 if (customDomainWarnings.length > 0) {
   logLines.push("", "CNAME TXT Security Warning:");
@@ -99,6 +110,14 @@ if (payload && typeof payload === "object") {
   }
   if (customDomains.length > 0) {
     lines.push(`- Custom domains: ${customDomains.map(code).join(", ")}`);
+  }
+
+  if (deploymentWarnings.length > 0) {
+    lines.push("", "#### ⚠️ Deploy Warnings", "");
+    for (const warning of deploymentWarnings) {
+      const message = warning.message ?? warning.code ?? "W7S reported a deploy warning.";
+      lines.push(`- ${text(message)}`);
+    }
   }
 
   if (customDomainWarnings.length > 0) {
