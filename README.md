@@ -58,7 +58,7 @@ If the workflow deploys a build directory with `working-directory` and that dire
 
 Deploy API warnings, such as a skipped `backend/` folder with no supported entrypoint, are shown in the GitHub Actions log and step summary.
 
-After a successful deploy, the action reads the repo's W7S usage for the deployed day. If any daily limits are near or over the configured policy, or W7S has suspended the app after hourly Cloudflare usage sync, the action adds a warning section to the GitHub Actions step summary and opens or updates a single GitHub issue for that repo/environment. Issue notifications require `issues: write`; set `usage-warnings-issue: false` to keep warnings in the workflow summary only.
+After a successful deploy, the action reads the repo's W7S usage for the deployed day. If any daily limits are near or over the configured policy, or W7S has suspended the app after hourly Cloudflare usage sync, the action adds a warning section to the GitHub Actions step summary and opens or updates one GitHub issue per repo/environment/UTC day. Later checks on the same day update that issue with the latest stats instead of creating more issues. Issue notifications require `issues: write`; set `usage-warnings-issue: false` to keep warnings in the workflow summary only.
 
 Scheduled workflows can set `usage-check-only: true` to check the current day's limits and update the warning issue without deploying again.
 

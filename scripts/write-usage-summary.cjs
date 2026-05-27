@@ -10,7 +10,10 @@ const asArray = (value) => Array.isArray(value) ? value : [];
 const code = (value) => `\`${String(value ?? "n/a")}\``;
 const text = (value) => String(value ?? "n/a");
 const markdownEscape = (value) => String(value ?? "n/a").replace(/\|/g, "\\|");
-const issueMarkerFor = (environment) => `<!-- w7s-usage-warnings:${String(environment || "production")} -->`;
+const issueMarkerFor = (environment, date) =>
+  `<!-- w7s-usage-warnings:${String(environment || "production")}:${String(date || usageDate())} -->`;
+const legacyIssueMarkerFor = (environment) =>
+  `<!-- w7s-usage-warnings:${String(environment || "production")} -->`;
 
 const booleanInput = (value, fallback) => {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -146,7 +149,11 @@ const renderWarnings = (usagePayload, issueResult = null, options = {}) => {
 
   lines.push("", "W7S returns HTTP `429` when a request would exceed an enforced daily limit.");
   if (issueResult?.htmlUrl) {
-    const action = issueResult.action === "updated" ? "Updated issue" : "Opened issue";
+    const action = issueResult.action === "updated"
+      ? "Updated issue"
+      : issueResult.action === "reopened"
+        ? "Reopened issue"
+        : "Opened issue";
     lines.push("", `${action}: [#${issueResult.number}](${issueResult.htmlUrl})`);
   } else if (issueResult?.skipped) {
     lines.push("", `Issue notification skipped: ${issueResult.skipped}`);
@@ -221,21 +228,27 @@ const issueBodyFor = (params) => {
   const environment = deployment?.environment || usage?.environment || "production";
   const runUrl = runUrlFor(deployment);
   const commitUrl = commitUrlFor(deployment);
+  const runAttempt = process.env.GITHUB_RUN_ATTEMPT_VALUE || process.env.GITHUB_RUN_ATTEMPT;
   const lines = [
-    issueMarkerFor(environment),
+    issueMarkerFor(environment, date),
     "",
     "W7S reported daily usage limit warnings or suspension state for this repository.",
+    "",
+    "This issue is scoped to one UTC day. Later W7S checks on the same day update this issue with the latest stats instead of opening more issues.",
     "",
     `- Repository: ${code(deployment?.repository)}`,
     `- Environment: ${code(environment)}`,
     `- Date: ${code(date)}`,
+    `- Last checked: ${code(new Date().toISOString())}`,
     `- Branch: ${code(deployment?.branch)}`,
     `- Commit: ${commitUrl ? `[${String(deployment?.commitSha || "").slice(0, 12)}](${commitUrl})` : code(deployment?.commitSha)}`,
     checkOnly
       ? "- Check: usage only"
       : `- Deployment: ${deploymentUrl ? `[${deploymentUrl}](${deploymentUrl})` : code("n/a")}`
   ];
-  if (runUrl) lines.push(`- Workflow run: [${text(process.env.GITHUB_WORKFLOW_VALUE || "Deploy")}](${runUrl})`);
+  if (runUrl) {
+    lines.push(`- Workflow run: [${text(process.env.GITHUB_WORKFLOW_VALUE || "Deploy")}](${runUrl})${runAttempt ? `, attempt ${code(runAttempt)}` : ""}`);
+  }
   if (usage?.cloudflareSyncedAt) lines.push(`- Cloudflare usage synced at: ${code(usage.cloudflareSyncedAt)}`);
   if (Array.isArray(usage?.cloudflareHours)) lines.push(`- Cloudflare hourly records: ${code(usage.cloudflareHours.length)}`);
   if (appLimitState) {
@@ -249,17 +262,18 @@ const issueBodyFor = (params) => {
     lines.push("", "No metric warnings were returned with the current usage response.", "");
   }
   lines.push("W7S returns HTTP `429` when a request would exceed an enforced daily limit.");
-  lines.push("This issue is updated by `w7s-io/w7s-cloud@v1` while warnings continue.");
+  lines.push("This issue is updated by `w7s-io/w7s-cloud@v1` while warnings continue on the same UTC day.");
   return lines.join("\n");
 };
 
-const findOpenUsageIssue = async (params) => {
+const findUsageIssue = async (params) => {
   const repoPath = githubRepoPath(params.repository);
   if (!repoPath) return null;
-  const marker = issueMarkerFor(params.environment);
+  const marker = issueMarkerFor(params.environment, params.date);
+  const legacyMarker = legacyIssueMarkerFor(params.environment);
   const { response, payload, raw } = await githubRequest({
     token: params.token,
-    path: `${repoPath}/issues?state=open&per_page=100`
+    path: `${repoPath}/issues?state=all&per_page=100`
   });
   if (!response.ok) {
     return {
@@ -268,7 +282,15 @@ const findOpenUsageIssue = async (params) => {
   }
   const issue = asArray(payload).find((candidate) =>
     !candidate.pull_request &&
-    (String(candidate.body || "").includes(marker) || candidate.title === params.title)
+    (
+      String(candidate.body || "").includes(marker) ||
+      candidate.title === params.title ||
+      (
+        params.allowLegacyMatch &&
+        String(candidate.body || "").includes(legacyMarker) &&
+        candidate.title === `W7S usage warning for ${params.environment}`
+      )
+    )
   );
   return issue || null;
 };
@@ -284,8 +306,10 @@ const upsertUsageIssue = async (params) => {
   const repoPath = githubRepoPath(params.repository);
   if (!repoPath) return { skipped: "repository is not in owner/repo form." };
 
-  const environment = params.deployment?.environment || "production";
-  const title = `W7S usage warning for ${environment}`;
+  const usage = params.usagePayload?.data?.usage;
+  const environment = params.deployment?.environment || usage?.environment || "production";
+  const date = usage?.date || usageDate(params.deployment?.deployedAt);
+  const title = `W7S usage warning for ${environment} on ${date}`;
   const body = issueBodyFor({
     deployment: params.deployment,
     deploymentUrl: params.deploymentUrl,
@@ -293,18 +317,24 @@ const upsertUsageIssue = async (params) => {
     usagePayload: params.usagePayload
   });
 
-  const existing = await findOpenUsageIssue({
+  const existing = await findUsageIssue({
     token: params.token,
     repository: params.repository,
     environment,
-    title
+    date,
+    title,
+    allowLegacyMatch: date === usageDate(params.deployment?.deployedAt)
   });
   if (existing?.error) return { skipped: existing.error };
 
   const request = existing ? {
     method: "PATCH",
     path: `${repoPath}/issues/${existing.number}`,
-    body: { title, body }
+    body: {
+      title,
+      body,
+      ...(existing.state === "closed" ? { state: "open" } : {})
+    }
   } : {
     method: "POST",
     path: `${repoPath}/issues`,
@@ -321,7 +351,7 @@ const upsertUsageIssue = async (params) => {
     };
   }
   return {
-    action: existing ? "updated" : "opened",
+    action: existing?.state === "closed" ? "reopened" : existing ? "updated" : "opened",
     number: payload?.number,
     htmlUrl: payload?.html_url
   };
