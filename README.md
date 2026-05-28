@@ -51,12 +51,27 @@ jobs:
 - `logs-limit`: Maximum number of log records to fetch. Defaults to `50`.
 - `logs-kind`: Optional log kind filter: `console`, `exception`, or `outcome`.
 - `logs-level`: Optional console log level filter: `debug`, `info`, `log`, `warn`, or `error`.
+- `telegram-chat-id`: Optional Telegram chat id to link to this repo for deployment notifications and future repo alerts.
+- `telegram-user-id`: Optional alias for `telegram-chat-id`.
+- `telegram-events`: Optional comma-separated notification events. Defaults to `deploy_success,deploy_warning,deploy_error,app_suspended,payment_request`.
 
 The action packages the working directory as a ZIP archive, excluding `.git`, `node_modules`, `.wrangler`, and `dist/.vite`, then posts it to the W7S deploy endpoint with repository, branch, and commit headers.
 
 If the workflow deploys a build directory with `working-directory` and that directory does not contain a `CNAME`, the action copies the repository root `CNAME` into the deploy directory before packaging. A `CNAME` already present in the deploy directory is left unchanged.
 
 Deploy API warnings, such as a skipped `backend/` folder with no supported entrypoint, are shown in the GitHub Actions log and step summary.
+
+To receive Telegram notifications, start a chat with the W7S bot first. The bot replies with your chat id and a workflow example. Then add that id to the deploy step:
+
+```yaml
+- uses: w7s-io/w7s-cloud@v1
+  with:
+    token: ${{ github.token }}
+    telegram-chat-id: "123456789"
+    telegram-events: deploy_success,deploy_warning,deploy_error,app_suspended,payment_request
+```
+
+W7S stores the Telegram chat id against the repo/environment after a successful authenticated deploy. That lets W7S send later repo alerts such as usage suspensions or payment requests.
 
 After a successful deploy, the action reads the repo's W7S usage for the deployed day. If any daily limits are near or over the configured policy, or W7S has suspended the app after hourly Cloudflare usage sync, the action adds a warning section to the GitHub Actions step summary and opens or updates one GitHub issue per repo/environment/UTC day. Later checks on the same day update that issue with the latest stats instead of creating more issues. Issue notifications require `issues: write`; set `usage-warnings-issue: false` to keep warnings in the workflow summary only.
 

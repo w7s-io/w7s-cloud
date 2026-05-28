@@ -62,6 +62,18 @@ inputs:
     description: Optional console log level filter. Supported values are debug, info, log, warn, and error.
     required: false
     default: ""
+  telegram-chat-id:
+    description: Optional Telegram chat id to link to this repo for deployment notifications and future repo alerts.
+    required: false
+    default: ""
+  telegram-user-id:
+    description: Optional alias for telegram-chat-id. Private Telegram user ids can be used after the user starts the W7S bot.
+    required: false
+    default: ""
+  telegram-events:
+    description: Optional comma-separated Telegram notification events for this repo.
+    required: false
+    default: "deploy_success,deploy_warning,deploy_error,app_suspended,payment_request"
 
 outputs:
   logs-count:
@@ -104,6 +116,9 @@ runs:
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
         INPUT_VARS: ${{ inputs.vars }}
         INPUT_SECRETS: ${{ inputs.secrets }}
+        INPUT_TELEGRAM_CHAT_ID: ${{ inputs.telegram-chat-id }}
+        INPUT_TELEGRAM_USER_ID: ${{ inputs.telegram-user-id }}
+        INPUT_TELEGRAM_EVENTS: ${{ inputs.telegram-events }}
         FALLBACK_GITHUB_TOKEN: ${{ github.token }}
         GITHUB_REPOSITORY_NAME: ${{ github.repository }}
         GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
@@ -170,6 +185,13 @@ runs:
         fi
         if [ -n "$secrets_header" ]; then
           curl_headers+=(-H "x-w7s-secrets: ${secrets_header}")
+        fi
+        telegram_chat_id="${INPUT_TELEGRAM_CHAT_ID:-$INPUT_TELEGRAM_USER_ID}"
+        if [ -n "$telegram_chat_id" ]; then
+          curl_headers+=(-H "x-w7s-telegram-chat-id: ${telegram_chat_id}")
+          if [ -n "$INPUT_TELEGRAM_EVENTS" ]; then
+            curl_headers+=(-H "x-w7s-telegram-events: ${INPUT_TELEGRAM_EVENTS}")
+          fi
         fi
 
         http_status="$(curl -sS -o "$response_body" -w "%{http_code}" \
