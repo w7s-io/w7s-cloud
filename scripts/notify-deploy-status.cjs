@@ -172,7 +172,9 @@ const notifyW7s = async () => {
 (async () => {
   if (!chatId) return;
   if (botToken) await notifyTelegramDirectly();
-  else await notifyW7s();
+  else if (process.env.W7S_TELEGRAM_DIRECT_REQUIRED === "true") {
+    console.log("::warning title=W7S Telegram notification skipped::telegram-chat-id was provided, but telegram-bot-token is empty.");
+  }
 })().catch((error) => {
   const message = String(error.message || error)
     .replace(/%/g, "%25")

@@ -153,12 +153,14 @@ runs:
         fi
 
         telegram_chat_id="${INPUT_TELEGRAM_CHAT_ID:-$INPUT_TELEGRAM_USER_ID}"
+        telegram_direct_required="true"
         W7S_DEPLOY_TOKEN="$deploy_token" \
         W7S_TELEGRAM_CHAT_ID="$telegram_chat_id" \
         W7S_TELEGRAM_EVENTS="$INPUT_TELEGRAM_EVENTS" \
         W7S_TELEGRAM_BOT_TOKEN="$INPUT_TELEGRAM_BOT_TOKEN" \
         W7S_TELEGRAM_THREAD_ID="$INPUT_TELEGRAM_THREAD_ID" \
         W7S_TELEGRAM_MESSAGE_ID_PATH="$telegram_message_id" \
+        W7S_TELEGRAM_DIRECT_REQUIRED="$telegram_direct_required" \
         W7S_DEPLOY_ENVIRONMENT="$INPUT_ENVIRONMENT" \
           node "$GITHUB_ACTION_PATH/scripts/notify-deploy-status.cjs" "$INPUT_TELEGRAM_STATUS_STAGE" "$deploy_url" "$response_body" "" || true
 
@@ -244,6 +246,10 @@ runs:
         fi
 
         telegram_chat_id="${INPUT_TELEGRAM_CHAT_ID:-$INPUT_TELEGRAM_USER_ID}"
+        telegram_direct_required="false"
+        if [ -n "$INPUT_TELEGRAM_BOT_TOKEN" ] || [ -n "$INPUT_TELEGRAM_MESSAGE_ID" ]; then
+          telegram_direct_required="true"
+        fi
         write_telegram_output() {
           if [ -f "$telegram_message_id" ]; then
             echo "telegram-message-id=$(cat "$telegram_message_id")" >> "$GITHUB_OUTPUT"
@@ -258,6 +264,7 @@ runs:
           W7S_TELEGRAM_BOT_TOKEN="$INPUT_TELEGRAM_BOT_TOKEN" \
           W7S_TELEGRAM_THREAD_ID="$INPUT_TELEGRAM_THREAD_ID" \
           W7S_TELEGRAM_MESSAGE_ID_PATH="$telegram_message_id" \
+          W7S_TELEGRAM_DIRECT_REQUIRED="$telegram_direct_required" \
           W7S_DEPLOY_ENVIRONMENT="$INPUT_ENVIRONMENT" \
             node "$GITHUB_ACTION_PATH/scripts/notify-deploy-status.cjs" "$stage" "$deploy_url" "$response_body" "$status" || true
         }
