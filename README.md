@@ -54,6 +54,11 @@ jobs:
 - `telegram-chat-id`: Optional Telegram chat id to link to this repo for deployment notifications and future repo alerts.
 - `telegram-user-id`: Optional alias for `telegram-chat-id`.
 - `telegram-events`: Optional comma-separated notification events. Defaults to `deploy_success,deploy_warning,deploy_error,app_suspended,payment_request`.
+- `telegram-bot-token`: Optional Telegram bot token. When set with `telegram-chat-id`, the action sends one live deployment status message directly through that bot and edits it until completion.
+- `telegram-thread-id`: Optional Telegram message thread id for forum topics when `telegram-bot-token` is set.
+- `telegram-message-id`: Optional Telegram message id to edit when `telegram-bot-token` is set. Use the `telegram-message-id` output from an earlier notification step.
+- `telegram-notify-only`: Send or update the Telegram deployment status message without installing, building, deploying, checking usage, or fetching logs. Defaults to `false`.
+- `telegram-status-stage`: Status stage to send when `telegram-notify-only` is `true`. Defaults to `start`.
 
 The action packages the working directory as a ZIP archive, excluding `.git`, `node_modules`, `.wrangler`, and `dist/.vite`, then posts it to the W7S deploy endpoint with repository, branch, and commit headers.
 
@@ -71,7 +76,40 @@ To receive Telegram notifications, start a chat with the W7S bot first. The bot 
     telegram-events: deploy_success,deploy_warning,deploy_error,app_suspended,payment_request
 ```
 
-W7S stores the Telegram chat id against the repo/environment after a successful authenticated deploy. That lets W7S send later repo alerts such as usage suspensions or payment requests.
+W7S stores the Telegram chat id against the repo/environment after a successful authenticated deploy. That lets W7S send later repo alerts such as usage suspensions or payment requests. During deployment, the action also reports start, packaging, upload, and final status events back to W7S so the W7S-managed bot can send one live Telegram message and edit it until completion.
+
+To send live deployment status directly from the action through your own Telegram bot, add `telegram-bot-token`. In direct mode, W7S is not needed for the live Telegram message; the action sends the initial message and edits the same message while deployment progresses.
+
+```yaml
+- uses: w7s-io/w7s-cloud@v1
+  with:
+    token: ${{ github.token }}
+    telegram-chat-id: "123456789"
+    telegram-bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+```
+
+To show a Telegram message as soon as the workflow job starts, call the action once in notification-only mode, then pass its `telegram-message-id` output into the deploy call:
+
+```yaml
+- id: telegram-start
+  uses: w7s-io/w7s-cloud@v1
+  with:
+    telegram-notify-only: true
+    telegram-status-stage: start
+    telegram-chat-id: "123456789"
+    telegram-bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+- uses: actions/checkout@v5
+
+- uses: w7s-io/w7s-cloud@v1
+  with:
+    token: ${{ github.token }}
+    telegram-chat-id: "123456789"
+    telegram-bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+    telegram-message-id: ${{ steps.telegram-start.outputs.telegram-message-id }}
+```
+
+Telegram status notification failures are reported as workflow warnings and do not fail the deployment.
 
 After a successful deploy, the action reads the repo's W7S usage for the deployed day. If any daily limits are near or over the configured policy, or W7S has suspended the app after hourly Cloudflare usage sync, the action adds a warning section to the GitHub Actions step summary and opens or updates one GitHub issue per repo/environment/UTC day. Later checks on the same day update that issue with the latest stats instead of creating more issues. Issue notifications require `issues: write`; set `usage-warnings-issue: false` to keep warnings in the workflow summary only.
 

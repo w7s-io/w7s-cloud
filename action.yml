@@ -74,6 +74,26 @@ inputs:
     description: Optional comma-separated Telegram notification events for this repo.
     required: false
     default: "deploy_success,deploy_warning,deploy_error,app_suspended,payment_request"
+  telegram-bot-token:
+    description: Optional Telegram bot token. When set with telegram-chat-id, the action sends and edits live deployment status messages directly through that bot.
+    required: false
+    default: ""
+  telegram-thread-id:
+    description: Optional Telegram message thread id for forum topics when telegram-bot-token is set.
+    required: false
+    default: ""
+  telegram-message-id:
+    description: Optional Telegram message id to edit when telegram-bot-token is set. Use the telegram-message-id output from an earlier notification step.
+    required: false
+    default: ""
+  telegram-notify-only:
+    description: Send or update the Telegram deployment status message without installing, building, deploying, checking usage, or fetching logs.
+    required: false
+    default: "false"
+  telegram-status-stage:
+    description: Status stage to send when telegram-notify-only is true. Supported values include start, package, upload, success, warning, and error.
+    required: false
+    default: "start"
 
 outputs:
   logs-count:
@@ -82,12 +102,72 @@ outputs:
   logs-url:
     description: W7S logs API URL used when logs-check-only is true.
     value: ${{ steps.logs.outputs['logs-url'] }}
+  telegram-message-id:
+    description: Telegram message id created or updated by direct Telegram notifications.
+    value: ${{ steps.deploy.outputs['telegram-message-id'] || steps.telegram-notify.outputs['telegram-message-id'] }}
 
 runs:
   using: composite
   steps:
+    - name: Telegram notify
+      id: telegram-notify
+      if: ${{ inputs.telegram-notify-only == 'true' }}
+      shell: bash
+      env:
+        INPUT_DEPLOY_URL: ${{ inputs.deploy-url }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_TELEGRAM_CHAT_ID: ${{ inputs.telegram-chat-id }}
+        INPUT_TELEGRAM_USER_ID: ${{ inputs.telegram-user-id }}
+        INPUT_TELEGRAM_EVENTS: ${{ inputs.telegram-events }}
+        INPUT_TELEGRAM_BOT_TOKEN: ${{ inputs.telegram-bot-token }}
+        INPUT_TELEGRAM_THREAD_ID: ${{ inputs.telegram-thread-id }}
+        INPUT_TELEGRAM_MESSAGE_ID: ${{ inputs.telegram-message-id }}
+        INPUT_TELEGRAM_STATUS_STAGE: ${{ inputs.telegram-status-stage }}
+        FALLBACK_GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY_NAME: ${{ github.repository }}
+        GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
+        GITHUB_SHA_VALUE: ${{ github.sha }}
+        GITHUB_SERVER_URL_VALUE: ${{ github.server_url }}
+        GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
+        GITHUB_RUN_ATTEMPT_VALUE: ${{ github.run_attempt }}
+        GITHUB_WORKFLOW_VALUE: ${{ github.workflow }}
+      run: |
+        set -euo pipefail
+
+        deploy_token="${INPUT_TOKEN:-$FALLBACK_GITHUB_TOKEN}"
+        deploy_url="$INPUT_DEPLOY_URL"
+        if [ -n "$INPUT_ENVIRONMENT" ]; then
+          if [[ "$deploy_url" == *"?"* ]]; then
+            deploy_url="${deploy_url}&environment=${INPUT_ENVIRONMENT}"
+          else
+            deploy_url="${deploy_url}?environment=${INPUT_ENVIRONMENT}"
+          fi
+        fi
+
+        response_body="$RUNNER_TEMP/w7s-deploy-response.json"
+        telegram_message_id="$RUNNER_TEMP/w7s-telegram-message-id"
+        rm -f "$response_body" "$telegram_message_id"
+        if [ -n "$INPUT_TELEGRAM_MESSAGE_ID" ]; then
+          printf "%s" "$INPUT_TELEGRAM_MESSAGE_ID" > "$telegram_message_id"
+        fi
+
+        telegram_chat_id="${INPUT_TELEGRAM_CHAT_ID:-$INPUT_TELEGRAM_USER_ID}"
+        W7S_DEPLOY_TOKEN="$deploy_token" \
+        W7S_TELEGRAM_CHAT_ID="$telegram_chat_id" \
+        W7S_TELEGRAM_EVENTS="$INPUT_TELEGRAM_EVENTS" \
+        W7S_TELEGRAM_BOT_TOKEN="$INPUT_TELEGRAM_BOT_TOKEN" \
+        W7S_TELEGRAM_THREAD_ID="$INPUT_TELEGRAM_THREAD_ID" \
+        W7S_TELEGRAM_MESSAGE_ID_PATH="$telegram_message_id" \
+        W7S_DEPLOY_ENVIRONMENT="$INPUT_ENVIRONMENT" \
+          node "$GITHUB_ACTION_PATH/scripts/notify-deploy-status.cjs" "$INPUT_TELEGRAM_STATUS_STAGE" "$deploy_url" "$response_body" "" || true
+
+        if [ -f "$telegram_message_id" ]; then
+          echo "telegram-message-id=$(cat "$telegram_message_id")" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Install
-      if: ${{ inputs.install-command != '' && inputs.usage-check-only != 'true' && inputs.logs-check-only != 'true' }}
+      if: ${{ inputs.install-command != '' && inputs.usage-check-only != 'true' && inputs.logs-check-only != 'true' && inputs.telegram-notify-only != 'true' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -97,7 +177,7 @@ runs:
         eval "$W7S_INSTALL_COMMAND"
 
     - name: Build
-      if: ${{ inputs.build-command != '' && inputs.usage-check-only != 'true' && inputs.logs-check-only != 'true' }}
+      if: ${{ inputs.build-command != '' && inputs.usage-check-only != 'true' && inputs.logs-check-only != 'true' && inputs.telegram-notify-only != 'true' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -107,7 +187,8 @@ runs:
         eval "$W7S_BUILD_COMMAND"
 
     - name: Deploy
-      if: ${{ inputs.usage-check-only != 'true' && inputs.logs-check-only != 'true' }}
+      id: deploy
+      if: ${{ inputs.usage-check-only != 'true' && inputs.logs-check-only != 'true' && inputs.telegram-notify-only != 'true' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -119,6 +200,9 @@ runs:
         INPUT_TELEGRAM_CHAT_ID: ${{ inputs.telegram-chat-id }}
         INPUT_TELEGRAM_USER_ID: ${{ inputs.telegram-user-id }}
         INPUT_TELEGRAM_EVENTS: ${{ inputs.telegram-events }}
+        INPUT_TELEGRAM_BOT_TOKEN: ${{ inputs.telegram-bot-token }}
+        INPUT_TELEGRAM_THREAD_ID: ${{ inputs.telegram-thread-id }}
+        INPUT_TELEGRAM_MESSAGE_ID: ${{ inputs.telegram-message-id }}
         FALLBACK_GITHUB_TOKEN: ${{ github.token }}
         GITHUB_REPOSITORY_NAME: ${{ github.repository }}
         GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
@@ -151,8 +235,44 @@ runs:
         archive_path="$RUNNER_TEMP/w7s-deploy.zip"
         response_body="$RUNNER_TEMP/w7s-deploy-response.json"
         metadata_dir="$RUNNER_TEMP/w7s-deploy-metadata"
+        telegram_message_id="$RUNNER_TEMP/w7s-telegram-message-id"
         rm -f "$archive_path" "$response_body"
+        rm -f "$telegram_message_id"
         rm -rf "$metadata_dir"
+        if [ -n "$INPUT_TELEGRAM_MESSAGE_ID" ]; then
+          printf "%s" "$INPUT_TELEGRAM_MESSAGE_ID" > "$telegram_message_id"
+        fi
+
+        telegram_chat_id="${INPUT_TELEGRAM_CHAT_ID:-$INPUT_TELEGRAM_USER_ID}"
+        write_telegram_output() {
+          if [ -f "$telegram_message_id" ]; then
+            echo "telegram-message-id=$(cat "$telegram_message_id")" >> "$GITHUB_OUTPUT"
+          fi
+        }
+        notify_deploy_status() {
+          local stage="$1"
+          local status="${2:-}"
+          W7S_DEPLOY_TOKEN="$deploy_token" \
+          W7S_TELEGRAM_CHAT_ID="$telegram_chat_id" \
+          W7S_TELEGRAM_EVENTS="$INPUT_TELEGRAM_EVENTS" \
+          W7S_TELEGRAM_BOT_TOKEN="$INPUT_TELEGRAM_BOT_TOKEN" \
+          W7S_TELEGRAM_THREAD_ID="$INPUT_TELEGRAM_THREAD_ID" \
+          W7S_TELEGRAM_MESSAGE_ID_PATH="$telegram_message_id" \
+          W7S_DEPLOY_ENVIRONMENT="$INPUT_ENVIRONMENT" \
+            node "$GITHUB_ACTION_PATH/scripts/notify-deploy-status.cjs" "$stage" "$deploy_url" "$response_body" "$status" || true
+        }
+
+        deploy_completed="false"
+        on_deploy_exit() {
+          local exit_code="$?"
+          if [ "$deploy_completed" != "true" ] && [ "$exit_code" -ne 0 ]; then
+            notify_deploy_status error ""
+            write_telegram_output
+          fi
+        }
+        trap on_deploy_exit EXIT
+
+        notify_deploy_status start ""
 
         node "$GITHUB_ACTION_PATH/scripts/write-deploy-metadata.cjs" "$PWD" "$metadata_dir"
         vars_header="$(cat "$metadata_dir/vars.b64")"
@@ -163,6 +283,7 @@ runs:
           echo "Copied repo-root CNAME into the deploy directory."
         fi
 
+        notify_deploy_status package ""
         zip -qr "$archive_path" . \
           -x ".git/*" \
           -x "node_modules/*" \
@@ -186,7 +307,6 @@ runs:
         if [ -n "$secrets_header" ]; then
           curl_headers+=(-H "x-w7s-secrets: ${secrets_header}")
         fi
-        telegram_chat_id="${INPUT_TELEGRAM_CHAT_ID:-$INPUT_TELEGRAM_USER_ID}"
         if [ -n "$telegram_chat_id" ]; then
           curl_headers+=(-H "x-w7s-telegram-chat-id: ${telegram_chat_id}")
           if [ -n "$INPUT_TELEGRAM_EVENTS" ]; then
@@ -194,16 +314,30 @@ runs:
           fi
         fi
 
+        notify_deploy_status upload ""
         http_status="$(curl -sS -o "$response_body" -w "%{http_code}" \
           -X POST "$deploy_url" \
           "${curl_headers[@]}" \
           --data-binary "@${archive_path}")"
 
+        if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ] && node -e 'try{const fs=require("node:fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.exit(p?.status==="success"?0:1)}catch{process.exit(1)}' "$response_body"; then
+          if node -e 'try{const fs=require("node:fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const d=p?.data||{};const count=(v)=>Array.isArray(v)?v.length:0;process.exit(count(d.deploymentWarnings)+count(d.customDomainWarnings)+count(d.blockedCustomDomains)>0?0:1)}catch{process.exit(1)}' "$response_body"; then
+            notify_deploy_status warning "$http_status"
+          else
+            notify_deploy_status success "$http_status"
+          fi
+        else
+          notify_deploy_status error "$http_status"
+        fi
+        write_telegram_output
+        deploy_completed="true"
+        trap - EXIT
+
         node "$GITHUB_ACTION_PATH/scripts/format-deploy-response.cjs" "$response_body" "$http_status"
         W7S_DEPLOY_TOKEN="$deploy_token" W7S_GITHUB_TOKEN="$GITHUB_ACTION_TOKEN" node "$GITHUB_ACTION_PATH/scripts/write-usage-summary.cjs" "$response_body" "$deploy_url"
 
     - name: Check usage
-      if: ${{ inputs.usage-check-only == 'true' }}
+      if: ${{ inputs.usage-check-only == 'true' && inputs.telegram-notify-only != 'true' }}
       shell: bash
       env:
         INPUT_DEPLOY_URL: ${{ inputs.deploy-url }}
@@ -240,7 +374,7 @@ runs:
 
     - name: Fetch logs
       id: logs
-      if: ${{ inputs.logs-check-only == 'true' }}
+      if: ${{ inputs.logs-check-only == 'true' && inputs.telegram-notify-only != 'true' }}
       shell: bash
       env:
         INPUT_DEPLOY_URL: ${{ inputs.deploy-url }}
